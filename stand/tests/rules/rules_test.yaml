@@ -1,0 +1,187 @@
+# Модульные тесты recording rules: promtool подаёт заранее заданные ряды и сверяет результат.
+# Покрывают то, что нельзя проверить в smoke-тесте без Kubernetes: метрики cAdvisor, kube-state-metrics
+# и восстановление имени workload из имени пода, а также расчёт загрузки, долей и SLO.
+rule_files:
+  - generated/rules.yaml
+
+evaluation_interval: 5s
+
+tests:
+  - name: ресурсы считаются по workload, экспортеры не учитываются
+    interval: 5s
+    input_series:
+      - series: 'container_cpu_usage_seconds_total{namespace="platform", pod="processor-7d9f8c6b5-abcde", container="service"}'
+        values: '0+1.25x100'
+      - series: 'container_cpu_usage_seconds_total{namespace="platform", pod="processor-7d9f8c6b5-fghij", container="service"}'
+        values: '0+1.25x100'
+      - series: 'container_cpu_usage_seconds_total{namespace="data", pod="postgres-0", container="postgres"}'
+        values: '0+0.5x100'
+      - series: 'container_cpu_usage_seconds_total{namespace="data", pod="postgres-0", container="postgres-exporter"}'
+        values: '0+5x100'
+      - series: 'container_cpu_usage_seconds_total{namespace="monitoring", pod="kps-grafana-5d4f8c9b7-zzzzz", container="grafana"}'
+        values: '0+5x100'
+      - series: 'kube_pod_container_resource_limits{namespace="platform", pod="processor-7d9f8c6b5-abcde", container="service", resource="cpu", unit="core"}'
+        values: '0.5x100'
+      - series: 'kube_pod_container_resource_limits{namespace="platform", pod="processor-7d9f8c6b5-fghij", container="service", resource="cpu", unit="core"}'
+        values: '0.5x100'
+      - series: 'kube_pod_container_resource_limits{namespace="platform", pod="processor-7d9f8c6b5-oldpd", container="service", resource="cpu", unit="core"}'
+        values: '0.5x100'
+      - series: 'kube_pod_status_phase{namespace="platform", pod="processor-7d9f8c6b5-abcde", phase="Running"}'
+        values: '1x100'
+      - series: 'kube_pod_status_phase{namespace="platform", pod="processor-7d9f8c6b5-fghij", phase="Running"}'
+        values: '1x100'
+      - series: 'kube_pod_status_phase{namespace="platform", pod="processor-7d9f8c6b5-oldpd", phase="Running"}'
+        values: '0x100'
+    promql_expr_test:
+      - expr: mq:cpu_usage_cores:rate30s
+        eval_time: 2m
+        exp_samples:
+          - labels: 'mq:cpu_usage_cores:rate30s{namespace="platform", workload="processor"}'
+            value: 0.5
+          - labels: 'mq:cpu_usage_cores:rate30s{namespace="data", workload="postgres"}'
+            value: 0.1
+      - expr: mq:cpu_limit_cores
+        eval_time: 2m
+        exp_samples:
+          - labels: 'mq:cpu_limit_cores{namespace="platform", workload="processor"}'
+            value: 1
+      - expr: mq:cpu_utilization:ratio
+        eval_time: 2m
+        exp_samples:
+          - labels: 'mq:cpu_utilization:ratio{namespace="platform", workload="processor"}'
+            value: 0.5
+
+  - name: дефисы в имени сервиса не ломают восстановление workload
+    interval: 5s
+    input_series:
+      - series: 'container_memory_working_set_bytes{namespace="data", pod="kafka-0", container="kafka"}'
+        values: '1000x100'
+      - series: 'container_memory_working_set_bytes{namespace="data", pod="some-long-name-6b7c9d8f4-x2k9p", container="service"}'
+        values: '500x100'
+    promql_expr_test:
+      - expr: mq:memory_working_set_bytes
+        eval_time: 1m
+        exp_samples:
+          - labels: 'mq:memory_working_set_bytes{namespace="data", workload="kafka"}'
+            value: 1000
+          - labels: 'mq:memory_working_set_bytes{namespace="data", workload="some-long-name"}'
+            value: 500
+
+  - name: реплики берутся и из Deployment, и из StatefulSet
+    interval: 5s
+    input_series:
+      - series: 'kube_deployment_spec_replicas{namespace="platform", deployment="filter"}'
+        values: '3x100'
+      - series: 'kube_deployment_status_replicas_available{namespace="platform", deployment="filter"}'
+        values: '2x100'
+      - series: 'kube_statefulset_replicas{namespace="data", statefulset="postgres"}'
+        values: '1x100'
+      - series: 'kube_statefulset_status_replicas_ready{namespace="data", statefulset="postgres"}'
+        values: '1x100'
+    promql_expr_test:
+      - expr: mq:replicas_desired
+        eval_time: 1m
+        exp_samples:
+          - labels: 'mq:replicas_desired{namespace="platform", workload="filter"}'
+            value: 3
+          - labels: 'mq:replicas_desired{namespace="data", workload="postgres"}'
+            value: 1
+      - expr: mq:replicas_available
+        eval_time: 1m
+        exp_samples:
+          - labels: 'mq:replicas_available{namespace="platform", workload="filter"}'
+            value: 2
+          - labels: 'mq:replicas_available{namespace="data", workload="postgres"}'
+            value: 1
+
+  # Поток в топик 20 сообщений в секунду, группа полностью занята и разбирает только 15.
+  - name: загрузка показывает перегрузку выше единицы
+    interval: 5s
+    input_series:
+      - series: 'kafka_topic_partition_current_offset{topic="events-enriched", partition="0"}'
+        values: '0+50x100'
+      - series: 'kafka_topic_partition_current_offset{topic="events-enriched", partition="1"}'
+        values: '0+50x100'
+      - series: 'consumer_messages_total{namespace="platform", service="processor", pod="a", topic="events-enriched", result="ok"}'
+        values: '0+37.5x100'
+      - series: 'consumer_messages_total{namespace="platform", service="processor", pod="b", topic="events-enriched", result="ok"}'
+        values: '0+37.5x100'
+      - series: 'consumer_busy_seconds_total{namespace="platform", service="processor", pod="a", topic="events-enriched"}'
+        values: '0+5x100'
+      - series: 'consumer_busy_seconds_total{namespace="platform", service="processor", pod="b", topic="events-enriched"}'
+        values: '0+5x100'
+    promql_expr_test:
+      - expr: mq:consumer_busy:ratio_rate1m
+        eval_time: 2m
+        exp_samples:
+          - labels: 'mq:consumer_busy:ratio_rate1m{service="processor", topic="events-enriched"}'
+            value: 1
+      - expr: mq:consumer_capacity_messages:rate1m
+        eval_time: 2m
+        exp_samples:
+          - labels: 'mq:consumer_capacity_messages:rate1m{service="processor", topic="events-enriched"}'
+            value: 15
+      - expr: mq:consumer_rho:ratio_rate1m
+        eval_time: 2m
+        exp_samples:
+          - labels: 'mq:consumer_rho:ratio_rate1m{service="processor", topic="events-enriched"}'
+            value: 1.3333333333333333
+
+  # Принято 100 событий в секунду, 10 отфильтровано, до витрины дошло 81 из 90 ожидаемых.
+  - name: доля обработанных не считает отфильтрованные потерями
+    interval: 5s
+    input_series:
+      - series: 'platform_events_received_total{service="ingest"}'
+        values: '0+500x100'
+      - series: 'platform_events_filtered_total{service="filter", reason="rule"}'
+        values: '0+50x100'
+      - series: 'platform_events_processed_total{service="processor", status="ok"}'
+        values: '0+405x100'
+    promql_expr_test:
+      - expr: mq:biz_processed:ratio_rate5m
+        eval_time: 6m
+        exp_samples:
+          - labels: 'mq:biz_processed:ratio_rate5m'
+            value: 0.9
+
+  - name: нарушение доступности попадает в общий признак SLO
+    interval: 5s
+    input_series:
+      - series: 'http_requests_total{namespace="platform", service="ingest", route="/events", method="POST", code="202"}'
+        values: '0+98x100'
+      - series: 'http_requests_total{namespace="platform", service="ingest", route="/events", method="POST", code="503"}'
+        values: '0+2x100'
+      - series: 'http_requests_total{namespace="platform", service="showcase", route="/showcase/{tenant}", method="GET", code="200"}'
+        values: '0+100x100'
+    promql_expr_test:
+      - expr: mq:availability:ratio_rate30s
+        eval_time: 2m
+        exp_samples:
+          - labels: 'mq:availability:ratio_rate30s{service="ingest"}'
+            value: 0.98
+          - labels: 'mq:availability:ratio_rate30s{service="showcase"}'
+            value: 1
+      - expr: mq:slo_availability_violation
+        eval_time: 2m
+        exp_samples:
+          - labels: 'mq:slo_availability_violation{service="ingest"}'
+            value: 1
+          - labels: 'mq:slo_availability_violation{service="showcase"}'
+            value: 0
+      - expr: mq:slo_violation
+        eval_time: 2m
+        exp_samples:
+          - labels: 'mq:slo_violation'
+            value: 1
+
+  - name: при отсутствии ошибок клиента доля отказов равна нулю, а не пуста
+    interval: 5s
+    input_series:
+      - series: 'k6_http_reqs_total{name="publish", expected_response="true"}'
+        values: '0+100x100'
+    promql_expr_test:
+      - expr: mq:load_failed:ratio_rate30s
+        eval_time: 2m
+        exp_samples:
+          - labels: 'mq:load_failed:ratio_rate30s{name="publish"}'
+            value: 0

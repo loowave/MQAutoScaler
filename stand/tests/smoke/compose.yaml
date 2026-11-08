@@ -1,0 +1,223 @@
+# Smoke-тест платформы без Kubernetes: те же образы, параметры и лимиты CPU, что в manifests/.
+# Запуск и проверка — tests/smoke/run.sh.
+name: mqautoscaler-smoke
+
+x-service: &service
+  image: mqautoscaler/platform:0.1.0
+  cpus: 0.5
+  mem_limit: 256m
+  restart: on-failure
+
+x-service-env: &service-env
+  KAFKA_BOOTSTRAP: kafka:9092
+  MONGO_URL: mongodb://mongodb:27017
+  REDIS_URL: redis://redis:6379
+  PG_DSN: postgresql://postgres:smoke@postgres:5432/platform
+  N_TENANTS: "10000"
+  SLA_SECONDS: "30"
+
+services:
+  fetch-jmx-agent:
+    image: curlimages/curl:8.23.0
+    user: root
+    entrypoint: [sh, -ec]
+    command:
+      - |
+        curl -fsSL --retry 5 -o /jmx/agent.jar https://repo1.maven.org/maven2/io/prometheus/jmx/jmx_prometheus_javaagent/1.0.1/jmx_prometheus_javaagent-1.0.1.jar
+        echo "7d61f737fd661610ccc14aea79764faa1ea94a340cbc8f0029b3d2edea3d80c1  /jmx/agent.jar" | sha256sum -c -
+        chmod 644 /jmx/agent.jar
+    volumes:
+      - jmx-agent:/jmx
+
+  kafka:
+    image: apache/kafka:3.9.2
+    cpus: 1
+    mem_limit: 1536m
+    depends_on:
+      fetch-jmx-agent: {condition: service_completed_successfully}
+    environment:
+      CLUSTER_ID: 4L6g3nShT-eMCtK--X86sw
+      KAFKA_NODE_ID: "1"
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "0"
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      KAFKA_LOG_RETENTION_CHECK_INTERVAL_MS: "10000"
+      KAFKA_HEAP_OPTS: -Xms512m -Xmx512m
+      KAFKA_OPTS: -javaagent:/jmx/agent.jar=9404:/jmx-config/config.yaml
+    volumes:
+      - jmx-agent:/jmx:ro
+      - ../../manifests/data/config/kafka-jmx.yaml:/jmx-config/config.yaml:ro
+
+  kafka-topics:
+    image: apache/kafka:3.9.2
+    restart: on-failure
+    depends_on: [kafka]
+    entrypoint: [bash, -ec]
+    command:
+      - |
+        for topic in events-raw events-filtered events-enriched; do
+          /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists \
+            --topic "$$topic" --partitions 6 --replication-factor 1 \
+            --config retention.bytes=134217728 --config segment.bytes=16777216
+        done
+
+  kafka-exporter:
+    image: danielqsj/kafka-exporter:v1.11.0
+    restart: on-failure
+    command: [--kafka.server=kafka:9092]
+    depends_on:
+      kafka-topics: {condition: service_completed_successfully}
+
+  postgres:
+    image: postgres:17.11
+    cpus: 1
+    mem_limit: 1g
+    command: [postgres, -c, max_connections=200, -c, shared_buffers=256MB, -c, track_io_timing=on]
+    environment:
+      POSTGRES_DB: platform
+      POSTGRES_PASSWORD: smoke
+    volumes:
+      - ../../manifests/data/config/postgres-schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+
+  postgres-exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.20.1
+    environment:
+      DATA_SOURCE_NAME: postgresql://postgres:smoke@postgres:5432/platform?sslmode=disable
+    depends_on: [postgres]
+
+  mongodb:
+    image: mongo:8.0.34
+    cpus: 1
+    mem_limit: 1536m
+    command: [--bind_ip_all, --wiredTigerCacheSizeGB=0.5]
+
+  mongodb-exporter:
+    image: percona/mongodb_exporter:0.54.0
+    command:
+      - --mongodb.uri=mongodb://mongodb:27017
+      - --collect-all
+      - --compatible-mode
+      - --web.listen-address=:9216
+    restart: on-failure
+    depends_on: [mongodb]
+
+  redis:
+    image: redis:7.4.12
+    cpus: 0.5
+    mem_limit: 384m
+    command: [--maxmemory, 256mb, --maxmemory-policy, allkeys-lru, --save, "", --appendonly, "no"]
+
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.97.0
+    environment:
+      REDIS_ADDR: redis://redis:6379
+    depends_on: [redis]
+
+  ingest:
+    <<: *service
+    deploy: {replicas: 2}
+    environment:
+      <<: *service-env
+      ROLE: ingest
+      OUT_TOPIC: events-raw
+      WORK_MS: "1"
+    depends_on:
+      kafka-topics: {condition: service_completed_successfully}
+
+  filter:
+    <<: *service
+    deploy: {replicas: 2}
+    environment:
+      <<: *service-env
+      ROLE: filter
+      IN_TOPIC: events-raw
+      OUT_TOPIC: events-filtered
+      WORK_MS: "4"
+      DROP_TYPES: debug
+    depends_on:
+      kafka-topics: {condition: service_completed_successfully}
+
+  enricher:
+    <<: *service
+    deploy: {replicas: 2}
+    environment:
+      <<: *service-env
+      ROLE: enricher
+      IN_TOPIC: events-filtered
+      OUT_TOPIC: events-enriched
+      WORK_MS: "2"
+    depends_on:
+      kafka-topics: {condition: service_completed_successfully}
+
+  processor:
+    <<: *service
+    deploy: {replicas: 2}
+    environment:
+      <<: *service-env
+      ROLE: processor
+      IN_TOPIC: events-enriched
+      WORK_MS: "8"
+      EXTERNAL_LATENCY_MS: "50"
+      EXTERNAL_FAIL_RATE: "0.01"
+      PG_POOL: "10"
+    depends_on:
+      kafka-topics: {condition: service_completed_successfully}
+
+  showcase:
+    <<: *service
+    deploy: {replicas: 2}
+    environment:
+      <<: *service-env
+      ROLE: showcase
+      WORK_MS: "3"
+      CACHE_TTL_S: "5"
+      PG_POOL: "10"
+    depends_on: [postgres]
+
+  prometheus:
+    image: quay.io/prometheus/prometheus:v3.16.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-remote-write-receiver
+      - --enable-feature=native-histograms
+    ports:
+      - 127.0.0.1:19090:9090
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./generated:/etc/prometheus/generated:ro
+
+  k6:
+    image: grafana/k6:1.8.2
+    profiles: [load]
+    command:
+      - run
+      - --out=experimental-prometheus-rw
+      - --tag=run_id=smoke
+      - /scripts/replay.js
+    environment:
+      PROFILE: /profile/profile.csv
+      SCALE: ${SCALE:-1}
+      READ_SHARE: "0.2"
+      INGEST_URL: http://ingest:8080
+      SHOWCASE_URL: http://showcase:8080
+      K6_DNS: ttl=0,select=roundRobin
+      K6_PROMETHEUS_RW_SERVER_URL: http://prometheus:9090/api/v1/write
+      K6_PROMETHEUS_RW_PUSH_INTERVAL: 5s
+      K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM: "true"
+      K6_SYSTEM_TAGS: status,method,name,scenario,expected_response
+    volumes:
+      - ../../manifests/load/replay.js:/scripts/replay.js:ro
+      - ${PROFILE_CSV:-../../manifests/load/profiles/ramp.csv}:/profile/profile.csv:ro
+
+volumes:
+  jmx-agent:
