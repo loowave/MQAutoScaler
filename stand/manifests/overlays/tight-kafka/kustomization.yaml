@@ -1,0 +1,14 @@
+# Узкое место — брокер: мало CPU. Растёт время подтверждения записи у ingest и у консьюмеров,
+# загрузка ρ растёт сразу у всей цепочки. Добавление реплик сервисов не помогает.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../baseline
+patches:
+  - target: {kind: StatefulSet, name: kafka, namespace: data}
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/resources
+        value:
+          requests: {cpu: 100m, memory: 1536Mi}
+          limits: {cpu: 100m, memory: 1536Mi}

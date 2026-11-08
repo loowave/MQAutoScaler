@@ -1,0 +1,61 @@
+# Базовая политика для сравнения: KEDA масштабирует консьюмеров по lag их топика.
+# Вместе с HPA для тех же Deployment не применять: политики будут перебивать друг друга.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: filter
+  namespace: platform
+spec:
+  scaleTargetRef:
+    name: filter
+  minReplicaCount: 1
+  maxReplicaCount: 6
+  pollingInterval: 5
+  cooldownPeriod: 60
+  triggers:
+    - type: kafka
+      metadata:
+        bootstrapServers: kafka.data.svc.cluster.local:9092
+        consumerGroup: filter
+        topic: events-raw
+        lagThreshold: "200"
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: enricher
+  namespace: platform
+spec:
+  scaleTargetRef:
+    name: enricher
+  minReplicaCount: 1
+  maxReplicaCount: 6
+  pollingInterval: 5
+  cooldownPeriod: 60
+  triggers:
+    - type: kafka
+      metadata:
+        bootstrapServers: kafka.data.svc.cluster.local:9092
+        consumerGroup: enricher
+        topic: events-filtered
+        lagThreshold: "200"
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: processor
+  namespace: platform
+spec:
+  scaleTargetRef:
+    name: processor
+  minReplicaCount: 1
+  maxReplicaCount: 6
+  pollingInterval: 5
+  cooldownPeriod: 60
+  triggers:
+    - type: kafka
+      metadata:
+        bootstrapServers: kafka.data.svc.cluster.local:9092
+        consumerGroup: processor
+        topic: events-enriched
+        lagThreshold: "200"

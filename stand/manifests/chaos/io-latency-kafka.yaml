@@ -1,0 +1,17 @@
+# Медленный диск брокера: растёт время подтверждения записи у ingest и у консьюмеров.
+apiVersion: chaos-mesh.org/v1alpha1
+kind: IOChaos
+metadata:
+  name: io-latency-kafka
+  namespace: data
+spec:
+  action: latency
+  mode: all
+  selector:
+    labelSelectors:
+      app.kubernetes.io/name: kafka
+  volumePath: /var/lib/kafka/data
+  path: /var/lib/kafka/data/**/*
+  delay: 20ms
+  percent: 50
+  duration: 180s

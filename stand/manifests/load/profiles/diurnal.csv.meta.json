@@ -1,0 +1,13 @@
+{
+  "source": "synthetic",
+  "duration": 1800,
+  "step": 10,
+  "peak": 100,
+  "shape": "diurnal",
+  "base_share": 0.2,
+  "noise": 0.03,
+  "seed": 1,
+  "points": 180,
+  "duration_s": 1800,
+  "mean_rps": 57.58
+}

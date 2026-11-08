@@ -1,0 +1,389 @@
+# Recording rules: признаки и цели датасета под префиксом mq:*.
+# Выгрузка датасета (tools/export_prometheus.py) забирает именно эти ряды, а сырые метрики остаются
+# в Prometheus для отладки. Смысл и роль каждого ряда описаны в docs/metrics.md.
+#
+# Окна: [30s] при сборе раз в 5 с — это 6 точек; для долей и бизнес-метрик окно шире, чтобы сгладить шум.
+# Метка workload — имя Deployment или StatefulSet, восстановленное из имени пода.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: mqautoscaler
+  namespace: monitoring
+spec:
+  groups:
+    # ---------------------------------------------------------------- ресурсы компонентов
+    - name: mq-resources
+      interval: 5s
+      rules:
+        - record: mq:cpu_usage_cores:rate30s
+          expr: |
+            sum by (namespace, workload) (label_replace(
+              rate(container_cpu_usage_seconds_total{namespace=~"platform|data", container!="", container!="POD", container!~".*exporter"}[30s]),
+              "workload", "$1", "pod", "(.+?)(-[a-z0-9]{5,10}-[a-z0-9]{5}|-[0-9]+)"))
+        - record: mq:cpu_limit_cores
+          expr: |
+            sum by (namespace, workload) (label_replace(
+              kube_pod_container_resource_limits{resource="cpu", namespace=~"platform|data", container!~".*exporter"}
+                * on (namespace, pod) group_left() (kube_pod_status_phase{phase="Running"} == 1),
+              "workload", "$1", "pod", "(.+?)(-[a-z0-9]{5,10}-[a-z0-9]{5}|-[0-9]+)"))
+        - record: mq:cpu_utilization:ratio
+          expr: mq:cpu_usage_cores:rate30s / mq:cpu_limit_cores
+        - record: mq:cpu_throttled:ratio_rate30s
+          expr: |
+            sum by (namespace, workload) (label_replace(
+              rate(container_cpu_cfs_throttled_periods_total{namespace=~"platform|data", container!="", container!~".*exporter"}[30s]),
+              "workload", "$1", "pod", "(.+?)(-[a-z0-9]{5,10}-[a-z0-9]{5}|-[0-9]+)"))
+            /
+            sum by (namespace, workload) (label_replace(
+              rate(container_cpu_cfs_periods_total{namespace=~"platform|data", container!="", container!~".*exporter"}[30s]),
+              "workload", "$1", "pod", "(.+?)(-[a-z0-9]{5,10}-[a-z0-9]{5}|-[0-9]+)"))
+        - record: mq:memory_working_set_bytes
+          expr: |
+            sum by (namespace, workload) (label_replace(
+              container_memory_working_set_bytes{namespace=~"platform|data", container!="", container!="POD", container!~".*exporter"},
+              "workload", "$1", "pod", "(.+?)(-[a-z0-9]{5,10}-[a-z0-9]{5}|-[0-9]+)"))
+        - record: mq:memory_limit_bytes
+          expr: |
+            sum by (namespace, workload) (label_replace(
+              kube_pod_container_resource_limits{resource="memory", namespace=~"platform|data", container!~".*exporter"}
+                * on (namespace, pod) group_left() (kube_pod_status_phase{phase="Running"} == 1),
+              "workload", "$1", "pod", "(.+?)(-[a-z0-9]{5,10}-[a-z0-9]{5}|-[0-9]+)"))
+        - record: mq:memory_utilization:ratio
+          expr: mq:memory_working_set_bytes / mq:memory_limit_bytes
+        - record: mq:network_receive_bytes:rate30s
+          expr: |
+            sum by (namespace, workload) (label_replace(
+              max by (namespace, pod, interface) (rate(container_network_receive_bytes_total{namespace=~"platform|data", interface="eth0"}[30s])),
+              "workload", "$1", "pod", "(.+?)(-[a-z0-9]{5,10}-[a-z0-9]{5}|-[0-9]+)"))
+        - record: mq:network_transmit_bytes:rate30s
+          expr: |
+            sum by (namespace, workload) (label_replace(
+              max by (namespace, pod, interface) (rate(container_network_transmit_bytes_total{namespace=~"platform|data", interface="eth0"}[30s])),
+              "workload", "$1", "pod", "(.+?)(-[a-z0-9]{5,10}-[a-z0-9]{5}|-[0-9]+)"))
+
+    # ---------------------------------------------------------------- ноды и диски
+    - name: mq-nodes
+      interval: 5s
+      rules:
+        - record: mq:node_cpu_utilization:ratio_rate30s
+          expr: 1 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[30s]))
+        - record: mq:node_memory_available:ratio
+          expr: node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes
+        - record: mq:node_disk_io_utilization:ratio_rate30s
+          expr: max by (instance) (rate(node_disk_io_time_seconds_total{device!~"loop.*|ram.*"}[30s]))
+        - record: mq:node_disk_read_bytes:rate30s
+          expr: sum by (instance) (rate(node_disk_read_bytes_total{device!~"loop.*|ram.*"}[30s]))
+        - record: mq:node_disk_write_bytes:rate30s
+          expr: sum by (instance) (rate(node_disk_written_bytes_total{device!~"loop.*|ram.*"}[30s]))
+        - record: mq:node_disk_iops:rate30s
+          expr: |
+            sum by (instance) (
+              rate(node_disk_reads_completed_total{device!~"loop.*|ram.*"}[30s])
+              + rate(node_disk_writes_completed_total{device!~"loop.*|ram.*"}[30s]))
+        - record: mq:node_filesystem_used:ratio
+          expr: |
+            max by (instance) (1 - node_filesystem_avail_bytes{fstype=~"ext4|xfs"} / node_filesystem_size_bytes{fstype=~"ext4|xfs"})
+        # PSI: доля времени, когда задачи ждали ресурс.
+        - record: mq:node_pressure_cpu:ratio_rate30s
+          expr: rate(node_pressure_cpu_waiting_seconds_total[30s])
+        - record: mq:node_pressure_memory:ratio_rate30s
+          expr: rate(node_pressure_memory_waiting_seconds_total[30s])
+        - record: mq:node_pressure_io:ratio_rate30s
+          expr: rate(node_pressure_io_waiting_seconds_total[30s])
+
+    # ---------------------------------------------------------------- состояние оркестратора
+    - name: mq-orchestrator
+      interval: 5s
+      rules:
+        - record: mq:replicas_available
+          expr: |
+            max by (namespace, workload) (
+              label_replace(kube_deployment_status_replicas_available{namespace=~"platform|data"}, "workload", "$1", "deployment", "(.+)")
+              or
+              label_replace(kube_statefulset_status_replicas_ready{namespace=~"platform|data"}, "workload", "$1", "statefulset", "(.+)"))
+        - record: mq:replicas_desired
+          expr: |
+            max by (namespace, workload) (
+              label_replace(kube_deployment_spec_replicas{namespace=~"platform|data"}, "workload", "$1", "deployment", "(.+)")
+              or
+              label_replace(kube_statefulset_replicas{namespace=~"platform|data"}, "workload", "$1", "statefulset", "(.+)"))
+        - record: mq:pods_pending
+          expr: sum by (namespace) (kube_pod_status_phase{namespace=~"platform|data", phase="Pending"})
+        - record: mq:container_restarts:increase1m
+          expr: |
+            sum by (namespace, workload) (label_replace(
+              increase(kube_pod_container_status_restarts_total{namespace=~"platform|data"}[1m]),
+              "workload", "$1", "pod", "(.+?)(-[a-z0-9]{5,10}-[a-z0-9]{5}|-[0-9]+)"))
+        - record: mq:oom_killed
+          expr: |
+            sum by (namespace, workload) (label_replace(
+              kube_pod_container_status_last_terminated_reason{namespace=~"platform|data", reason="OOMKilled"},
+              "workload", "$1", "pod", "(.+?)(-[a-z0-9]{5,10}-[a-z0-9]{5}|-[0-9]+)"))
+        - record: mq:scrape_up
+          expr: sum by (namespace, service) (up{namespace=~"platform|data"})
+
+    # ---------------------------------------------------------------- время ответа и доступность
+    - name: mq-http
+      interval: 5s
+      rules:
+        - record: mq:http_rps:rate30s
+          expr: sum by (service) (rate(http_requests_total{namespace="platform"}[30s]))
+        # Ряда с кодом 5xx нет, пока не случится первая ошибка: без "or ... * 0" доля была бы пустой, а не нулевой.
+        - record: mq:http_errors:ratio_rate30s
+          expr: |
+            (
+              sum by (service) (rate(http_requests_total{namespace="platform", code=~"5.."}[30s]))
+              or sum by (service) (rate(http_requests_total{namespace="platform"}[30s])) * 0
+            ) / sum by (service) (rate(http_requests_total{namespace="platform"}[30s]))
+        - record: mq:availability:ratio_rate30s
+          expr: 1 - mq:http_errors:ratio_rate30s
+        - record: mq:http_latency_seconds:p50
+          expr: histogram_quantile(0.50, sum by (service, le) (rate(http_request_duration_seconds_bucket{namespace="platform"}[30s])))
+        - record: mq:http_latency_seconds:p95
+          expr: histogram_quantile(0.95, sum by (service, le) (rate(http_request_duration_seconds_bucket{namespace="platform"}[30s])))
+        - record: mq:http_latency_seconds:p99
+          expr: histogram_quantile(0.99, sum by (service, le) (rate(http_request_duration_seconds_bucket{namespace="platform"}[30s])))
+        - record: mq:http_latency_seconds:mean
+          expr: |
+            sum by (service) (rate(http_request_duration_seconds_sum{namespace="platform"}[30s]))
+            / sum by (service) (rate(http_request_duration_seconds_count{namespace="platform"}[30s]))
+        # Apdex, T = 250 мс: довольные (быстрее T) плюс половина терпящих (быстрее 4T).
+        - record: mq:apdex:ratio_rate1m
+          expr: |
+            (
+              sum by (service) (rate(http_request_duration_seconds_bucket{namespace="platform", le="0.25"}[1m]))
+              + sum by (service) (rate(http_request_duration_seconds_bucket{namespace="platform", le="1.0"}[1m]))
+            ) / 2 / sum by (service) (rate(http_request_duration_seconds_count{namespace="platform"}[1m]))
+        - record: mq:http_inflight
+          expr: sum by (service) (http_requests_in_flight{namespace="platform"})
+
+    # ---------------------------------------------------------------- консьюмеры
+    - name: mq-consumers
+      interval: 5s
+      rules:
+        - record: mq:consumer_messages:rate30s
+          expr: sum by (service, topic, result) (rate(consumer_messages_total{namespace="platform"}[30s]))
+        - record: mq:consumer_processing_seconds:p50
+          expr: histogram_quantile(0.50, sum by (service, topic, le) (rate(consumer_processing_seconds_bucket{namespace="platform"}[30s])))
+        - record: mq:consumer_processing_seconds:p95
+          expr: histogram_quantile(0.95, sum by (service, topic, le) (rate(consumer_processing_seconds_bucket{namespace="platform"}[30s])))
+        - record: mq:consumer_wait_seconds:p50
+          expr: histogram_quantile(0.50, sum by (service, topic, le) (rate(consumer_wait_seconds_bucket{namespace="platform"}[30s])))
+        - record: mq:consumer_wait_seconds:p95
+          expr: histogram_quantile(0.95, sum by (service, topic, le) (rate(consumer_wait_seconds_bucket{namespace="platform"}[30s])))
+        # Занятость: средняя по репликам доля времени, потраченная на обработку, а не на ожидание сообщений.
+        - record: mq:consumer_busy:ratio_rate1m
+          expr: avg by (service, topic) (rate(consumer_busy_seconds_total{namespace="platform"}[1m]))
+        # Пропускная способность группы: сколько она разобрала бы при занятости 100%.
+        - record: mq:consumer_capacity_messages:rate1m
+          expr: |
+            sum by (service, topic) (rate(consumer_messages_total{namespace="platform"}[1m]))
+            / avg by (service, topic) (rate(consumer_busy_seconds_total{namespace="platform"}[1m]))
+        # Загрузка ρ = поток в топик / пропускная способность группы. При ρ > 1 очередь растёт.
+        # В отличие от занятости и CPU, она не упирается в 1 и показывает величину перегрузки.
+        - record: mq:consumer_rho:ratio_rate1m
+          expr: |
+            sum by (topic) (rate(kafka_topic_partition_current_offset[1m]))
+            / on (topic) group_right() mq:consumer_capacity_messages:rate1m
+        - record: mq:consumer_evicted:rate1m
+          expr: sum by (service, topic) (rate(consumer_evicted_messages_total{namespace="platform"}[1m]))
+        - record: mq:consumer_rebalances:increase1m
+          expr: sum by (service, topic) (increase(consumer_rebalances_total{namespace="platform"}[1m]))
+        - record: mq:consumer_partitions_assigned
+          expr: sum by (service, topic) (consumer_assigned_partitions{namespace="platform"})
+
+    # ---------------------------------------------------------------- брокер
+    - name: mq-broker
+      interval: 5s
+      rules:
+        - record: mq:kafka_lag
+          expr: sum by (consumergroup, topic) (kafka_consumergroup_lag)
+        - record: mq:kafka_produce_messages:rate30s
+          expr: sum by (topic) (rate(kafka_topic_partition_current_offset{topic!~"__.*"}[30s]))
+        - record: mq:kafka_consume_messages:rate30s
+          expr: sum by (consumergroup, topic) (rate(kafka_consumergroup_current_offset[30s]))
+        - record: mq:kafka_lag_growth:rate30s
+          expr: mq:kafka_produce_messages:rate30s - on (topic) group_right() mq:kafka_consume_messages:rate30s
+        # За сколько секунд разберётся текущий backlog при текущей скорости.
+        - record: mq:kafka_lag_seconds:estimate
+          expr: mq:kafka_lag / clamp_min(mq:kafka_consume_messages:rate30s, 0.001)
+        - record: mq:kafka_messages_in:rate30s
+          expr: sum (rate(kafka_broker_messagesinpersec_total[30s]))
+        - record: mq:kafka_bytes_in:rate30s
+          expr: sum (rate(kafka_broker_bytesinpersec_total[30s]))
+        - record: mq:kafka_bytes_out:rate30s
+          expr: sum (rate(kafka_broker_bytesoutpersec_total[30s]))
+        # Брокер и контроллер работают в одном процессе, и счётчик суммирует оба пула обработчиков.
+        # Контроллер в стенде почти всегда свободен, поэтому единицу вычитаем и получаем свободную долю брокера.
+        - record: mq:kafka_request_handler_idle:ratio
+          expr: clamp_min(max (kafka_broker_request_handler_idle_ratio) - 1, 0)
+        - record: mq:kafka_network_processor_idle:ratio
+          expr: max (kafka_broker_network_processor_idle_ratio)
+        - record: mq:kafka_request_queue_size
+          expr: max (kafka_broker_request_queue_size)
+        - record: mq:kafka_request_time_ms:p99
+          expr: max by (request) (kafka_broker_request_time_p99_ms)
+        - record: mq:kafka_log_flush_ms:p99
+          expr: max (kafka_broker_log_flush_p99_ms)
+        - record: mq:kafka_jvm_heap:ratio
+          expr: sum (jvm_memory_used_bytes{service="kafka", area="heap"}) / sum (jvm_memory_max_bytes{service="kafka", area="heap"})
+        - record: mq:kafka_jvm_gc_seconds:rate1m
+          expr: sum (rate(jvm_gc_collection_seconds_sum{service="kafka"}[1m]))
+        - record: mq:producer_send_seconds:p95
+          expr: histogram_quantile(0.95, sum by (service, topic, le) (rate(producer_send_seconds_bucket{namespace="platform"}[30s])))
+        - record: mq:producer_errors:ratio_rate30s
+          expr: |
+            sum by (service, topic) (rate(producer_messages_total{namespace="platform", result="error"}[30s]))
+            / sum by (service, topic) (rate(producer_messages_total{namespace="platform"}[30s]))
+
+    # ---------------------------------------------------------------- хранилища и кеш
+    - name: mq-storage
+      interval: 5s
+      rules:
+        # Обращения сервисов к хранилищам
+        - record: mq:db_operations:rate30s
+          expr: sum by (service, db, op) (rate(db_operation_duration_seconds_count{namespace="platform"}[30s]))
+        - record: mq:db_latency_seconds:p95
+          expr: histogram_quantile(0.95, sum by (service, db, op, le) (rate(db_operation_duration_seconds_bucket{namespace="platform"}[30s])))
+        - record: mq:db_pool_wait_seconds:p95
+          expr: histogram_quantile(0.95, sum by (service, db, le) (rate(db_pool_acquire_seconds_bucket{namespace="platform"}[30s])))
+        - record: mq:cache_hit:ratio_rate30s
+          expr: |
+            sum by (service) (rate(cache_requests_total{namespace="platform", result="hit"}[30s]))
+            / sum by (service) (rate(cache_requests_total{namespace="platform"}[30s]))
+        - record: mq:external_call_seconds:p95
+          expr: histogram_quantile(0.95, sum by (service, le) (rate(external_call_duration_seconds_bucket{namespace="platform"}[30s])))
+        # PostgreSQL
+        - record: mq:pg_transactions:rate30s
+          expr: |
+            sum (rate(pg_stat_database_xact_commit{datname="platform"}[30s]))
+            + sum (rate(pg_stat_database_xact_rollback{datname="platform"}[30s]))
+        - record: mq:pg_connections
+          expr: sum by (state) (pg_stat_activity_count{datname="platform"})
+        - record: mq:pg_buffer_hit:ratio_rate30s
+          expr: |
+            sum (rate(pg_stat_database_blks_hit{datname="platform"}[30s]))
+            / (sum (rate(pg_stat_database_blks_hit{datname="platform"}[30s])) + sum (rate(pg_stat_database_blks_read{datname="platform"}[30s])))
+        - record: mq:pg_block_read_ms:rate30s
+          expr: sum (rate(pg_stat_database_blk_read_time{datname="platform"}[30s]))
+        - record: mq:pg_block_write_ms:rate30s
+          expr: sum (rate(pg_stat_database_blk_write_time{datname="platform"}[30s]))
+        - record: mq:pg_locks
+          expr: sum by (mode) (pg_locks_count{datname="platform"})
+        - record: mq:pg_max_transaction_seconds
+          expr: max (pg_stat_activity_max_tx_duration{datname="platform"})
+        - record: mq:pg_deadlocks:increase1m
+          expr: sum (increase(pg_stat_database_deadlocks{datname="platform"}[1m]))
+        - record: mq:pg_rows_written:rate30s
+          expr: |
+            sum (rate(pg_stat_database_tup_inserted{datname="platform"}[30s]))
+            + sum (rate(pg_stat_database_tup_updated{datname="platform"}[30s]))
+        # MongoDB
+        - record: mq:mongo_operations:rate30s
+          expr: sum by (type) (rate(mongodb_op_counters_total[30s]))
+        - record: mq:mongo_connections
+          expr: sum (mongodb_connections{state="current"})
+        - record: mq:mongo_lock_queue
+          expr: sum by (type) (mongodb_mongod_global_lock_current_queue)
+        - record: mq:mongo_cache_bytes
+          expr: sum (mongodb_ss_wt_cache_bytes_currently_in_the_cache)
+        # Redis
+        - record: mq:redis_commands:rate30s
+          expr: sum (rate(redis_commands_processed_total[30s]))
+        - record: mq:redis_hit:ratio_rate30s
+          expr: |
+            sum (rate(redis_keyspace_hits_total[30s]))
+            / (sum (rate(redis_keyspace_hits_total[30s])) + sum (rate(redis_keyspace_misses_total[30s])))
+        - record: mq:redis_memory:ratio
+          expr: sum (redis_memory_used_bytes) / sum (redis_memory_max_bytes)
+        - record: mq:redis_evictions:rate30s
+          expr: sum (rate(redis_evicted_keys_total[30s]))
+        - record: mq:redis_clients
+          expr: sum (redis_connected_clients)
+
+    # ---------------------------------------------------------------- бизнес-метрики
+    - name: mq-business
+      interval: 5s
+      rules:
+        - record: mq:biz_events_received:rate1m
+          expr: sum (rate(platform_events_received_total[1m]))
+        - record: mq:biz_events_rejected:rate1m
+          expr: sum (rate(platform_events_rejected_total[1m]))
+        - record: mq:biz_events_filtered:rate1m
+          expr: sum by (reason) (rate(platform_events_filtered_total[1m]))
+        - record: mq:biz_events_processed:rate1m
+          expr: sum by (status) (rate(platform_events_processed_total[1m]))
+        # Доля принятых: сколько событий вход смог принять из отправленных.
+        - record: mq:biz_accepted:ratio_rate1m
+          expr: |
+            sum (rate(platform_events_received_total[1m]))
+            / (sum (rate(platform_events_received_total[1m])) + sum (rate(platform_events_rejected_total[1m])))
+        # Доля обработанных: сколько событий дошло до витрины из тех, что должны были дойти.
+        # Отфильтрованные не считаются, поэтому в устойчивом режиме значение близко к 1 - доля отказов внешнего вызова.
+        - record: mq:biz_processed:ratio_rate5m
+          expr: |
+            sum (rate(platform_events_processed_total{status="ok"}[5m]))
+            / (sum (rate(platform_events_received_total[5m])) - sum (rate(platform_events_filtered_total[5m])))
+        - record: mq:biz_external_failures:ratio_rate1m
+          expr: |
+            sum (rate(platform_events_processed_total{status="failed"}[1m]))
+            / sum (rate(platform_events_processed_total[1m]))
+        - record: mq:biz_events_lost:rate1m
+          expr: sum by (stage) (rate(platform_events_lost_total[1m]))
+        - record: mq:biz_events_evicted:rate1m
+          expr: sum (rate(consumer_evicted_messages_total{namespace="platform"}[1m]))
+        - record: mq:biz_sla_met:ratio_rate1m
+          expr: |
+            sum (rate(platform_events_sla_total{result="met"}[1m]))
+            / sum (rate(platform_events_sla_total[1m]))
+        - record: mq:biz_end_to_end_seconds:p50
+          expr: histogram_quantile(0.50, sum by (le) (rate(platform_event_end_to_end_seconds_bucket[1m])))
+        - record: mq:biz_end_to_end_seconds:p95
+          expr: histogram_quantile(0.95, sum by (le) (rate(platform_event_end_to_end_seconds_bucket[1m])))
+        - record: mq:biz_showcase_reads:rate1m
+          expr: sum by (result) (rate(platform_showcase_reads_total[1m]))
+        - record: mq:biz_showcase_freshness_seconds
+          expr: min (platform_showcase_freshness_seconds)
+        # Стоимость: сколько ядер выделено сервисам платформы. Её автоскейлер уравновешивает с качеством.
+        - record: mq:biz_allocated_cores
+          expr: sum (mq:cpu_limit_cores{namespace="platform"})
+
+    # ---------------------------------------------------------------- нагрузка со стороны клиента
+    - name: mq-load
+      interval: 5s
+      rules:
+        - record: mq:load_rps:rate30s
+          expr: sum by (name) (rate(k6_http_reqs_total[30s]))
+        - record: mq:load_failed:ratio_rate30s
+          expr: |
+            sum by (name) (rate(k6_http_reqs_total{expected_response="false"}[30s]) or rate(k6_http_reqs_total{expected_response="true"}[30s]) * 0)
+            / sum by (name) (rate(k6_http_reqs_total[30s]))
+        - record: mq:load_availability:ratio_rate30s
+          expr: 1 - mq:load_failed:ratio_rate30s
+        - record: mq:load_latency_seconds:p95
+          expr: histogram_quantile(0.95, sum by (name) (rate(k6_http_req_duration_seconds[30s])))
+        - record: mq:load_dropped_iterations:rate30s
+          expr: sum (rate(k6_dropped_iterations_total[30s]))
+        - record: mq:load_vus
+          expr: sum (k6_vus)
+
+    # ---------------------------------------------------------------- цели (SLO)
+    # Пороги стартовые, их нужно уточнить после замера ёмкости. В признаки модели эти ряды не подаются.
+    - name: mq-slo
+      interval: 5s
+      rules:
+        - record: mq:slo_ingest_latency_violation
+          expr: mq:http_latency_seconds:p95{service="ingest"} > bool 0.5
+        - record: mq:slo_showcase_latency_violation
+          expr: mq:http_latency_seconds:p95{service="showcase"} > bool 0.5
+        - record: mq:slo_availability_violation
+          expr: mq:availability:ratio_rate30s < bool 0.99
+        - record: mq:slo_end_to_end_violation
+          expr: mq:biz_end_to_end_seconds:p95 > bool 30
+        - record: mq:slo_violation
+          expr: |
+            max (
+              label_replace(mq:slo_ingest_latency_violation, "slo", "ingest_latency", "", "")
+              or label_replace(mq:slo_showcase_latency_violation, "slo", "showcase_latency", "", "")
+              or label_replace(mq:slo_availability_violation, "slo", "availability", "", "")
+              or label_replace(mq:slo_end_to_end_violation, "slo", "end_to_end", "", ""))

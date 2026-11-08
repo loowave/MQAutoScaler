@@ -1,0 +1,30 @@
+lowercaseOutputName: true
+includeObjectNames:
+  - "kafka.server:type=BrokerTopicMetrics,name=*"
+  - "kafka.server:type=KafkaRequestHandlerPool,name=RequestHandlerAvgIdlePercent"
+  - "kafka.network:type=SocketServer,name=NetworkProcessorAvgIdlePercent"
+  - "kafka.network:type=RequestChannel,name=RequestQueueSize"
+  - "kafka.network:type=RequestMetrics,name=TotalTimeMs,request=Produce"
+  - "kafka.network:type=RequestMetrics,name=TotalTimeMs,request=FetchConsumer"
+  - "kafka.log:type=LogFlushStats,name=LogFlushRateAndTimeMs"
+rules:
+  - pattern: 'kafka.server<type=BrokerTopicMetrics, name=(MessagesInPerSec|BytesInPerSec|BytesOutPerSec)><>Count'
+    name: kafka_broker_$1_total
+    type: COUNTER
+  - pattern: 'kafka.server<type=KafkaRequestHandlerPool, name=RequestHandlerAvgIdlePercent><>OneMinuteRate'
+    name: kafka_broker_request_handler_idle_ratio
+    type: GAUGE
+  - pattern: 'kafka.network<type=SocketServer, name=NetworkProcessorAvgIdlePercent><>Value'
+    name: kafka_broker_network_processor_idle_ratio
+    type: GAUGE
+  - pattern: 'kafka.network<type=RequestChannel, name=RequestQueueSize><>Value'
+    name: kafka_broker_request_queue_size
+    type: GAUGE
+  - pattern: 'kafka.network<type=RequestMetrics, name=TotalTimeMs, request=(Produce|FetchConsumer)><>99thPercentile'
+    name: kafka_broker_request_time_p99_ms
+    labels:
+      request: $1
+    type: GAUGE
+  - pattern: 'kafka.log<type=LogFlushStats, name=LogFlushRateAndTimeMs><>99thPercentile'
+    name: kafka_broker_log_flush_p99_ms
+    type: GAUGE

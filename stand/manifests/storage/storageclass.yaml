@@ -1,0 +1,13 @@
+# Локальные диски нод через local-path-provisioner, который входит в k3s.
+# Том создаётся на той ноде, куда назначен под, поэтому диски брокера и баз находятся на ноде data,
+# а Prometheus — на ноде infra. Каталог томов на ноде: /var/lib/rancher/k3s/storage.
+#
+# Provisioner не отдаёт kubelet_volume_stats_*: заполненность томов видна по метрикам файловой
+# системы ноды (mq:node_filesystem_used:ratio). Подробнее о дисках — в docs/resources.md.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: stand-local
+provisioner: rancher.io/local-path
+reclaimPolicy: Delete
+volumeBindingMode: WaitForFirstConsumer

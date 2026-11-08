@@ -1,0 +1,16 @@
+# Медленная деградация: память реплик processor занимается посторонним процессом и приближается к лимиту.
+apiVersion: chaos-mesh.org/v1alpha1
+kind: StressChaos
+metadata:
+  name: memory-pressure-processor
+  namespace: platform
+spec:
+  mode: all
+  selector:
+    labelSelectors:
+      app.kubernetes.io/name: processor
+  stressors:
+    memory:
+      workers: 1
+      size: 150MB
+  duration: 300s

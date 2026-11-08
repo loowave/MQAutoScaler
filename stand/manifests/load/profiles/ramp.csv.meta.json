@@ -1,0 +1,13 @@
+{
+  "source": "synthetic",
+  "duration": 600.0,
+  "step": 10,
+  "peak": 100,
+  "shape": "ramp",
+  "base_share": 0.1,
+  "noise": 0.03,
+  "seed": 1,
+  "points": 60,
+  "duration_s": 600,
+  "mean_rps": 55.48
+}

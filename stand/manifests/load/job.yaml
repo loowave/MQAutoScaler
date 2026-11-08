@@ -1,0 +1,54 @@
+# Генератор нагрузки. Запускается через scripts/run-load.sh: скрипт подставляет идентификатор запуска
+# и множитель интенсивности, а профиль кладёт в ConfigMap k6-profile.
+# Фактическая нагрузка попадает в Prometheus как метрики k6_* с меткой run_id.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: k6-replay
+  labels:
+    app.kubernetes.io/name: k6
+spec:
+  backoffLimit: 0                 # автоматический повтор исказил бы фактическую нагрузку
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: k6
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        mqautoscaler/load: "true"
+      containers:
+        - name: k6
+          image: grafana/k6:1.8.2
+          args:
+            - run
+            - --out=experimental-prometheus-rw
+            - --tag=run_id=$(RUN_ID)
+            - /scripts/replay.js
+          env:
+            - {name: RUN_ID, value: "__RUN_ID__"}
+            - {name: SCALE, value: "__SCALE__"}
+            - {name: PROFILE, value: /profile/profile.csv}
+            - {name: READ_SHARE, value: "0.2"}
+            - {name: DEBUG_SHARE, value: "0.1"}
+            - {name: DUP_SHARE, value: "0.01"}
+            - {name: MAX_VUS, value: "2000"}
+            - {name: K6_PROMETHEUS_RW_SERVER_URL, value: "http://kps-prometheus.monitoring.svc.cluster.local:9090/api/v1/write"}
+            - {name: K6_PROMETHEUS_RW_PUSH_INTERVAL, value: 5s}
+            - {name: K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM, value: "true"}
+            # Без url в метках: иначе каждый идентификатор арендатора стал бы отдельным рядом.
+            - {name: K6_SYSTEM_TAGS, value: "status,method,name,scenario,expected_response"}
+          resources:
+            requests: {cpu: "1", memory: 1Gi}
+            limits: {cpu: "2", memory: 3Gi}
+          volumeMounts:
+            - {name: scripts, mountPath: /scripts}
+            - {name: profile, mountPath: /profile}
+      volumes:
+        - name: scripts
+          configMap:
+            name: k6-scripts
+        - name: profile
+          configMap:
+            name: k6-profile

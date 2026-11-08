@@ -1,0 +1,13 @@
+{
+  "source": "azure2021",
+  "duration": 1800,
+  "step": 10,
+  "peak": 100,
+  "window_start_h": 240.0,
+  "window_hours": 24.0,
+  "input": "AzureFunctionsInvocationTraceForTwoWeeksJan2021.txt",
+  "time_compression": 47.97,
+  "points": 180,
+  "duration_s": 1800,
+  "mean_rps": 7.41
+}

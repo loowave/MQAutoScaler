@@ -1,0 +1,11 @@
+# Общие адреса и параметры сервисов платформы.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: platform-config
+data:
+  KAFKA_BOOTSTRAP: kafka.data.svc.cluster.local:9092
+  MONGO_URL: mongodb://mongodb.data.svc.cluster.local:27017
+  REDIS_URL: redis://redis.data.svc.cluster.local:6379
+  N_TENANTS: "10000"
+  SLA_SECONDS: "30"

@@ -1,0 +1,17 @@
+# Узкое место — база данных: мало CPU и маленький shared_buffers. Растёт ожидание соединения из пула
+# у processor и время чтения витрины. Масштабирование консьюмера здесь проблему не решает.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../baseline
+patches:
+  - target: {kind: StatefulSet, name: postgres, namespace: data}
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/resources
+        value:
+          requests: {cpu: 100m, memory: 512Mi}
+          limits: {cpu: 100m, memory: 512Mi}
+      - op: replace
+        path: /spec/template/spec/containers/0/args/3
+        value: shared_buffers=32MB

@@ -1,0 +1,66 @@
+# Параметры чарта kube-prometheus-stack. Версия чарта зафиксирована в Makefile.
+fullnameOverride: kps      # сервис Prometheus: kps-prometheus.monitoring:9090
+
+alertmanager:
+  enabled: false           # стенд считает SLO через recording rules, алерты не нужны
+
+# В k3s эти компоненты не отдают метрики отдельными сервисами.
+kubeEtcd: {enabled: false}
+kubeScheduler: {enabled: false}
+kubeControllerManager: {enabled: false}
+kubeProxy: {enabled: false}
+
+kubelet:
+  serviceMonitor:
+    interval: 5s
+
+prometheus:
+  prometheusSpec:
+    scrapeInterval: 5s
+    evaluationInterval: 5s
+    retention: 30d
+    # k6 отправляет фактическую нагрузку через remote write, задержки — нативными гистограммами.
+    enableRemoteWriteReceiver: true
+    enableFeatures: [native-histograms]
+    # Учитывать ServiceMonitor и PrometheusRule стенда, а не только объекты с меткой релиза.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    nodeSelector:
+      mqautoscaler/infra: "true"
+    resources:
+      requests: {cpu: "1", memory: 4Gi}
+      limits: {cpu: "2", memory: 6Gi}
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: stand-local
+          accessModes: [ReadWriteOnce]
+          resources:
+            requests:
+              storage: 50Gi
+
+prometheusOperator:
+  nodeSelector:
+    mqautoscaler/infra: "true"
+  admissionWebhooks:
+    deployment:
+      nodeSelector:
+        mqautoscaler/infra: "true"
+    patch:
+      nodeSelector:
+        mqautoscaler/infra: "true"
+
+kube-state-metrics:
+  nodeSelector:
+    mqautoscaler/infra: "true"
+
+prometheus-node-exporter:
+  extraArgs:
+    - --collector.pressure     # PSI: node_pressure_{cpu,memory,io}_*
+
+grafana:
+  nodeSelector:
+    mqautoscaler/infra: "true"
+  admin:
+    existingSecret: grafana-admin   # создаётся в scripts/create-secrets.sh

@@ -1,0 +1,57 @@
+# Модуль фильтрации: отбрасывает лишние типы событий и дубли, остальное передаёт дальше.
+apiVersion: v1
+kind: Service
+metadata:
+  name: filter
+  labels:
+    app.kubernetes.io/name: filter
+    mqautoscaler/scrape: "true"
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: filter
+  ports:
+    - {name: metrics, port: 9100}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: filter
+  labels:
+    app.kubernetes.io/name: filter
+    app.kubernetes.io/component: consumer
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: filter
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: filter
+        app.kubernetes.io/component: consumer
+    spec:
+      enableServiceLinks: false
+      nodeSelector:
+        mqautoscaler/app: "true"
+      containers:
+        - name: service
+          image: mqautoscaler/platform:0.1.0
+          imagePullPolicy: Never
+          envFrom:
+            - configMapRef:
+                name: platform-config
+          env:
+            - {name: ROLE, value: "filter"}
+            - {name: IN_TOPIC, value: "events-raw"}
+            - {name: OUT_TOPIC, value: "events-filtered"}
+            - {name: WORK_MS, value: "4"}
+            - {name: DROP_TYPES, value: "debug"}
+          ports:
+            - {name: metrics, containerPort: 9100}
+          resources:
+            requests: {cpu: 500m, memory: 256Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          readinessProbe:
+            tcpSocket: {port: metrics}
+            periodSeconds: 5

@@ -1,0 +1,17 @@
+# Один ServiceMonitor на всю измеряемую систему: в Prometheus попадает любой Service с меткой
+# mqautoscaler/scrape=true и портом metrics в namespace platform и data.
+# Метка service в метриках равна имени Kubernetes Service: ingest, filter, postgres и так далее.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: mqautoscaler
+spec:
+  namespaceSelector:
+    matchNames: [platform, data]
+  selector:
+    matchLabels:
+      mqautoscaler/scrape: "true"
+  endpoints:
+    - port: metrics
+      interval: 5s
+      scrapeTimeout: 4s

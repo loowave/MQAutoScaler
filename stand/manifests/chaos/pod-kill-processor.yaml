@@ -1,0 +1,12 @@
+# Падение обработчика: одна реплика processor завершается, группа перераспределяет партиции.
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: pod-kill-processor
+  namespace: platform
+spec:
+  action: pod-kill
+  mode: one
+  selector:
+    labelSelectors:
+      app.kubernetes.io/name: processor

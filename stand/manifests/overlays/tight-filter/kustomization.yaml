@@ -1,0 +1,16 @@
+# Узкое место — модуль фильтрации: растёт lag топика events-raw, поток дальше по цепочке падает.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../baseline
+patches:
+  - target: {kind: Deployment, name: filter, namespace: platform}
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
+      - op: replace
+        path: /spec/template/spec/containers/0/resources
+        value:
+          requests: {cpu: 200m, memory: 256Mi}
+          limits: {cpu: 200m, memory: 256Mi}

@@ -1,0 +1,13 @@
+{
+  "source": "series",
+  "duration": 1800,
+  "step": 10,
+  "peak": 100,
+  "start": "2014-10-06",
+  "end": "2014-10-13",
+  "input": "nyc_taxi.csv",
+  "time_compression": 335.0,
+  "points": 180,
+  "duration_s": 1800,
+  "mean_rps": 60.18
+}

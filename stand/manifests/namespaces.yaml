@@ -1,0 +1,31 @@
+# platform    сервисы событийной платформы
+# data        брокер, базы данных и кеш
+# monitoring  Prometheus, Grafana и экспортеры кластера
+# load        генератор нагрузки
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: platform
+  labels:
+    app.kubernetes.io/part-of: mqautoscaler
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: data
+  labels:
+    app.kubernetes.io/part-of: mqautoscaler
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+  labels:
+    app.kubernetes.io/part-of: mqautoscaler
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: load
+  labels:
+    app.kubernetes.io/part-of: mqautoscaler

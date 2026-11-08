@@ -1,0 +1,17 @@
+# Нехватка CPU: посторонняя нагрузка внутри лимита реплик filter. Поток не меняется,
+# а доля времени на полезную работу падает. Деградация здесь не связана с ростом входа.
+apiVersion: chaos-mesh.org/v1alpha1
+kind: StressChaos
+metadata:
+  name: cpu-stress-filter
+  namespace: platform
+spec:
+  mode: all
+  selector:
+    labelSelectors:
+      app.kubernetes.io/name: filter
+  stressors:
+    cpu:
+      workers: 1
+      load: 80
+  duration: 180s

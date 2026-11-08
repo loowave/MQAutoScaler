@@ -1,0 +1,17 @@
+# Застой зависимости: задержка сети до PostgreSQL. Растёт ожидание соединения из пула у processor
+# и время чтения витрины. Добавление реплик консьюмера это не исправляет.
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: network-delay-postgres
+  namespace: data
+spec:
+  action: delay
+  mode: all
+  selector:
+    labelSelectors:
+      app.kubernetes.io/name: postgres
+  delay:
+    latency: 30ms
+    jitter: 10ms
+  duration: 180s
