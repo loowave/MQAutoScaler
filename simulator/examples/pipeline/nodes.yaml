@@ -1,0 +1,64 @@
+nodes:
+  # Stateless request handler: five instances, 40 messages per instance/tick.
+  backend:
+    type: dummy
+    resources:
+      instances: 5
+      cpu_per_instance: 1.0
+      ram_per_instance: 1000000       # virtual bytes
+      network_per_instance: 200000    # virtual bytes per tick and instance
+    observation:
+      retention: 120.0
+      window: 1.0
+    params:
+      capacity_per_instance_per_tick: 40
+      cpu_per_message: 0.01
+      ram_bytes_per_message: 2048
+
+  # Three brokers.  Each accepts 400 writes/tick and serves 50 reads/tick,
+  # so the queue drains at 150 messages per tick regardless of arrival rate.
+  kafka:
+    type: kafka
+    resources:
+      instances: 3
+      cpu_per_instance: 1.0
+      ram_per_instance: 2000000       # virtual bytes
+      disk_per_instance: 2000000      # virtual bytes
+      network_per_instance: 500000    # virtual bytes per tick and instance
+    observation:
+      retention: 120.0
+      window: 1.0
+    params:
+      write_interaction: topic_write
+      read_interaction: topic_read
+      write_capacity_per_instance_per_tick: 400
+      read_capacity_per_instance_per_tick: 50
+      cpu_per_message: 0.002
+      ram_bytes_per_message: 1024
+
+  # Event consumer: two instances, 150 messages per instance/tick.
+  consumer:
+    type: dummy
+    resources:
+      instances: 2
+      cpu_per_instance: 1.0
+      ram_per_instance: 1000000
+      network_per_instance: 100000
+    params:
+      capacity_per_instance_per_tick: 150
+      cpu_per_message: 0.01
+      ram_bytes_per_message: 2048
+
+  # Simplified database: one instance, high write capacity.
+  postgres:
+    type: dummy
+    resources:
+      instances: 1
+      cpu_per_instance: 2.0
+      ram_per_instance: 4000000
+      disk_per_instance: 10000000
+    params:
+      capacity_per_instance_per_tick: 500
+      cpu_per_message: 0.01
+      ram_bytes_per_message: 4096
+      disk_bytes_per_message: 1024     # stored rows grow with traffic

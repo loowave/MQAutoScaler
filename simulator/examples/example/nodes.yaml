@@ -1,0 +1,21 @@
+nodes:
+  gateway:
+    type: dummy
+    resources:
+      instances: 1
+      cpu_per_instance: 1.0
+      ram_per_instance: 1.0
+    observation:
+      retention: 60.0
+      window: 1.0
+    params:
+      capacity_per_tick: 40
+
+  worker:
+    type: dummy
+    resources:
+      instances: 2
+      cpu_per_instance: 1.0
+      ram_per_instance: 2.0
+    params:
+      capacity_per_tick: 20

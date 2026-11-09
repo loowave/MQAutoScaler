@@ -1,0 +1,22 @@
+# Interaction types describe behaviour only.  Receivers of caused work are
+# resolved from outgoing edges of the same interaction type on each node.
+interactions:
+  ingress_request:
+    caused:
+      - interaction: backend_request
+        delay: 0.0
+        messages_per_accepted: 1
+
+  backend_request:
+    caused:
+      - interaction: backend_reply
+        delay: 0.25
+        messages_per_accepted: 1
+        profile:
+          bytes_per_message: 64
+          retry:
+            delay: 1.0
+            max_attempts: 3
+            expires_after: 10.0
+
+  backend_reply: {}

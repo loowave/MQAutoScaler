@@ -1,0 +1,15 @@
+edges:
+  - id: backend_to_kafka
+    from: backend
+    to: kafka
+    interaction: topic_write
+
+  - id: kafka_to_consumer
+    from: kafka
+    to: consumer
+    interaction: topic_read
+
+  - id: consumer_to_postgres
+    from: consumer
+    to: postgres
+    interaction: db_write

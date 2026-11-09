@@ -1,0 +1,10 @@
+producers:
+  - id: client
+    rate: 20.0                    # messages per simulated second
+    batch_size: 5
+    bytes_per_message: 256
+    start: 0.0
+    stop: 30.0
+    targets:
+      - node: gateway
+        interaction: ingress_request
