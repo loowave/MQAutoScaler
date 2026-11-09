@@ -1,0 +1,10 @@
+producers:
+  - id: client
+    rate: 180.0                  # client requests per simulated second
+    batch_size: 10
+    bytes_per_message: 512
+    start: 0.0
+    stop: 60.0
+    targets:
+      - node: backend
+        interaction: client_request

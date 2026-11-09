@@ -1,0 +1,33 @@
+# Same request path as pipeline, but Kafka is the bottleneck.
+interactions:
+  client_request:
+    caused:
+      - interaction: topic_write
+        profile:
+          bytes_per_message: 512
+          retry:
+            delay: 1.0
+            max_attempts: 3
+            expires_after: 10.0
+
+  topic_write:
+    caused:
+      - interaction: topic_read
+        profile:
+          bytes_per_message: 512
+          retry:
+            delay: 1.0
+            max_attempts: 3
+            expires_after: 10.0
+
+  topic_read:
+    caused:
+      - interaction: db_write
+        profile:
+          bytes_per_message: 1024
+          retry:
+            delay: 1.0
+            max_attempts: 3
+            expires_after: 10.0
+
+  db_write: {}

@@ -1,0 +1,10 @@
+edges:
+  - id: gateway_to_worker
+    from: gateway
+    to: worker
+    interaction: backend_request
+
+  - id: worker_to_gateway
+    from: worker
+    to: gateway
+    interaction: backend_reply
